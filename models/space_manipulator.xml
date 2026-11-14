@@ -5,7 +5,7 @@
 
   <visual>
     <global offwidth="1280" offheight="720"/>
-    <headlight diffuse="0.25 0.25 0.30" ambient="0.15 0.15 0.18" specular="0.3 0.3 0.3"/>
+    <headlight diffuse="0.28 0.28 0.32" ambient="0.16 0.16 0.20" specular="0.35 0.35 0.35"/>
     <map znear="0.05" zfar="100.0"/>
   </visual>
 
@@ -27,21 +27,40 @@
     <material name="ref_grid_mat" texture="ref_grid_tex" texrepeat="12 12"
               texuniform="true" reflectance="0.0"/>
 
-    <!-- Spacecraft & manipulator materials -->
-    <material name="gold_mli" rgba="0.85 0.65 0.15 1.0" specular="0.8" shininess="0.7" reflectance="0.2"/>
-    <material name="bus_alloy" rgba="0.22 0.25 0.30 1.0" specular="0.5" shininess="0.4"/>
-    <material name="solar_cell" rgba="0.06 0.14 0.38 1.0" specular="0.7" shininess="0.8" reflectance="0.15"/>
-    <material name="arm_titanium" rgba="0.82 0.84 0.87 1.0" specular="0.5" shininess="0.5"/>
-    <material name="joint_dark" rgba="0.15 0.16 0.19 1.0" specular="0.4" shininess="0.4"/>
-    <material name="target_hull" rgba="0.75 0.32 0.18 1.0" specular="0.6" shininess="0.6"/>
+    <!-- CAD 3D meshes exported in millimeters (mm) -> scale="0.001 0.001 0.001" to meters -->
+    <mesh name="sat_bus_frame" file="meshes/sat_bus_frame.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="sat_mli_foil" file="meshes/sat_mli_foil.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="sat_rcs_thrusters" file="meshes/sat_rcs_thrusters.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="solar_array_frame" file="meshes/solar_array_frame.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="solar_array_cells" file="meshes/solar_array_cells.stl" scale="0.001 0.001 0.001"/>
+
+    <mesh name="arm_link1_housing" file="meshes/arm_link1_housing.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="arm_link1_accents" file="meshes/arm_link1_accents.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="arm_link2_housing" file="meshes/arm_link2_housing.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="arm_link2_accents" file="meshes/arm_link2_accents.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="arm_link3_wrist" file="meshes/arm_link3_wrist.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="arm_gripper" file="meshes/arm_gripper.stl" scale="0.001 0.001 0.001"/>
+
+    <mesh name="target_sat_body" file="meshes/target_sat_body.stl" scale="0.001 0.001 0.001"/>
+    <mesh name="target_grapple_fixture" file="meshes/target_grapple_fixture.stl" scale="0.001 0.001 0.001"/>
+
+    <!-- Rich aerospace PBR-like materials -->
+    <material name="gold_mli" rgba="0.88 0.66 0.14 1.0" specular="0.95" shininess="0.85" reflectance="0.35"/>
+    <material name="bus_alloy" rgba="0.68 0.71 0.76 1.0" specular="0.75" shininess="0.65" reflectance="0.15"/>
+    <material name="aero_white" rgba="0.91 0.92 0.94 1.0" specular="0.45" shininess="0.50" reflectance="0.05"/>
+    <material name="carbon_fiber" rgba="0.16 0.17 0.20 1.0" specular="0.40" shininess="0.45" reflectance="0.04"/>
+    <material name="solar_cell" rgba="0.05 0.14 0.42 1.0" specular="0.85" shininess="0.90" reflectance="0.25"/>
+    <material name="anodized_accent" rgba="0.82 0.44 0.12 1.0" specular="0.85" shininess="0.75" reflectance="0.20"/>
+    <material name="rcs_dark" rgba="0.20 0.22 0.26 1.0" specular="0.65" shininess="0.60" reflectance="0.10"/>
+    <material name="target_hull" rgba="0.74 0.31 0.18 1.0" specular="0.70" shininess="0.65" reflectance="0.12"/>
   </asset>
 
   <worldbody>
     <!-- Space illumination (sunlight + faint Earthshine fill) -->
     <light name="sun_light" directional="true" pos="6 -6 10" dir="-0.45 0.45 -0.77"
-           diffuse="0.95 0.94 0.90" specular="0.6 0.6 0.6" castshadow="true"/>
+           diffuse="0.95 0.94 0.90" specular="0.65 0.65 0.65" castshadow="true"/>
     <light name="earthshine" directional="true" pos="-4 4 -6" dir="0.4 -0.4 0.8"
-           diffuse="0.18 0.24 0.35" specular="0.1 0.1 0.1" castshadow="false"/>
+           diffuse="0.18 0.24 0.35" specular="0.12 0.12 0.12" castshadow="false"/>
 
     <!-- Visual-only reference grid below spacecraft (no collision in microgravity) -->
     <geom name="ref_grid" type="plane" pos="0 0 -1.5" size="12 12 0.1"
@@ -52,31 +71,22 @@
       <freejoint name="base_freejoint"/>
       <inertial pos="0 0 0" mass="45.0" diaginertia="6.0 2.6 6.0"/>
 
-      <!-- Main spacecraft bus -->
-      <geom name="base_bus_core" type="box" size="0.30 0.30 0.30" material="gold_mli"/>
-      <geom name="base_front_plate" type="box" pos="0.305 0 0" size="0.01 0.26 0.26"
-            material="bus_alloy" contype="0" conaffinity="0"/>
+      <!-- Physics collision primitives (hidden in group 3) -->
+      <geom name="base_bus_core" type="box" size="0.30 0.30 0.30" group="3" rgba="0 0 0 0"/>
+      <geom name="solar_wing_pos_y" type="box" pos="0 0.92 0" size="0.22 0.50 0.012" group="3" rgba="0 0 0 0"/>
+      <geom name="solar_wing_neg_y" type="box" pos="0 -0.92 0" size="0.22 0.50 0.012" group="3" rgba="0 0 0 0"/>
 
-      <!-- Visual RCS thruster pods on corners -->
-      <geom name="rcs_pod_1" type="cylinder" pos="0.28 0.28 0.28" size="0.025 0.03"
-            material="joint_dark" contype="0" conaffinity="0"/>
-      <geom name="rcs_pod_2" type="cylinder" pos="0.28 -0.28 0.28" size="0.025 0.03"
-            material="joint_dark" contype="0" conaffinity="0"/>
-      <geom name="rcs_pod_3" type="cylinder" pos="-0.28 0.28 -0.28" size="0.025 0.03"
-            material="joint_dark" contype="0" conaffinity="0"/>
-      <geom name="rcs_pod_4" type="cylinder" pos="-0.28 -0.28 -0.28" size="0.025 0.03"
-            material="joint_dark" contype="0" conaffinity="0"/>
-
-      <!-- Left & right solar array wings along +/- Y -->
-      <geom name="solar_boom_pos_y" type="cylinder" fromto="0 0.30 0 0 0.42 0" size="0.022"
-            material="bus_alloy" contype="0" conaffinity="0"/>
-      <geom name="solar_wing_pos_y" type="box" pos="0 0.92 0" size="0.22 0.50 0.012"
-            material="solar_cell"/>
-
-      <geom name="solar_boom_neg_y" type="cylinder" fromto="0 -0.30 0 0 -0.42 0" size="0.022"
-            material="bus_alloy" contype="0" conaffinity="0"/>
-      <geom name="solar_wing_neg_y" type="box" pos="0 -0.92 0" size="0.22 0.50 0.012"
-            material="solar_cell"/>
+      <!-- CAD 3D visual meshes -->
+      <geom name="vis_sat_bus_frame" type="mesh" mesh="sat_bus_frame" material="bus_alloy"
+            contype="0" conaffinity="0" group="0"/>
+      <geom name="vis_sat_mli_foil" type="mesh" mesh="sat_mli_foil" material="gold_mli"
+            contype="0" conaffinity="0" group="0"/>
+      <geom name="vis_sat_rcs_thrusters" type="mesh" mesh="sat_rcs_thrusters" material="rcs_dark"
+            contype="0" conaffinity="0" group="0"/>
+      <geom name="vis_solar_array_frame" type="mesh" mesh="solar_array_frame" material="carbon_fiber"
+            contype="0" conaffinity="0" group="0"/>
+      <geom name="vis_solar_array_cells" type="mesh" mesh="solar_array_cells" material="solar_cell"
+            contype="0" conaffinity="0" group="0"/>
 
       <!-- Base IMU & thruster application site -->
       <site name="base_imu_site" pos="0 0 0" size="0.03" rgba="1.0 0.55 0.0 0.9"/>
@@ -86,31 +96,40 @@
         <inertial pos="0.04 0 0" mass="2.0" diaginertia="0.01 0.01 0.01"/>
         <joint name="joint1" type="hinge" axis="0 0 1" range="-2.0944 2.0944" damping="0.1" armature="0.02"/>
 
-        <geom name="link1_hub" type="cylinder" pos="0 0 0" size="0.055 0.05" material="joint_dark"/>
-        <geom name="link1_bracket" type="box" pos="0.045 0 0" size="0.045 0.04 0.04" material="arm_titanium"/>
+        <geom name="link1_hub" type="cylinder" pos="0 0 0" size="0.055 0.05" group="3" rgba="0 0 0 0"/>
+        <geom name="link1_bracket" type="box" pos="0.045 0 0" size="0.045 0.04 0.04" group="3" rgba="0 0 0 0"/>
+
+        <geom name="vis_arm_link1_housing" type="mesh" mesh="arm_link1_housing" material="aero_white"
+              contype="0" conaffinity="0" group="0"/>
+        <geom name="vis_arm_link1_accents" type="mesh" mesh="arm_link1_accents" material="anodized_accent"
+              contype="0" conaffinity="0" group="0"/>
 
         <body name="link2" pos="0.09 0 0">
           <inertial pos="0.275 0 0" mass="3.5" diaginertia="0.02 0.10 0.10"/>
           <joint name="joint2" type="hinge" axis="0 1 0" range="-2.0944 2.0944" damping="0.1" armature="0.02"/>
 
           <geom name="joint2_housing" type="cylinder" pos="0 0 0" quat="0.707107 0.707107 0 0"
-                size="0.05 0.055" material="joint_dark"/>
-          <geom name="link2_boom" type="capsule" fromto="0 0 0 0.55 0 0" size="0.038" material="arm_titanium"/>
+                size="0.05 0.055" group="3" rgba="0 0 0 0"/>
+          <geom name="link2_boom" type="capsule" fromto="0 0 0 0.55 0 0" size="0.038" group="3" rgba="0 0 0 0"/>
+
+          <geom name="vis_arm_link2_housing" type="mesh" mesh="arm_link2_housing" material="aero_white"
+                contype="0" conaffinity="0" group="0"/>
+          <geom name="vis_arm_link2_accents" type="mesh" mesh="arm_link2_accents" material="anodized_accent"
+                contype="0" conaffinity="0" group="0"/>
 
           <body name="link3" pos="0.55 0 0">
             <inertial pos="0.27 0 0" mass="2.5" diaginertia="0.015 0.07 0.07"/>
             <joint name="joint3" type="hinge" axis="0 1 0" range="-2.3562 2.3562" damping="0.1" armature="0.02"/>
 
             <geom name="joint3_housing" type="cylinder" pos="0 0 0" quat="0.707107 0.707107 0 0"
-                  size="0.044 0.048" material="joint_dark"/>
-            <geom name="link3_boom" type="capsule" fromto="0 0 0 0.50 0 0" size="0.032" material="arm_titanium"/>
+                  size="0.044 0.048" group="3" rgba="0 0 0 0"/>
+            <geom name="link3_boom" type="capsule" fromto="0 0 0 0.50 0 0" size="0.032" group="3" rgba="0 0 0 0"/>
+            <geom name="ee_palm" type="box" pos="0.52 0 0" size="0.022 0.055 0.025" group="3" rgba="0 0 0 0"/>
 
-            <!-- Visual end-effector gripper -->
-            <geom name="ee_palm" type="box" pos="0.52 0 0" size="0.022 0.055 0.025" material="joint_dark"/>
-            <geom name="ee_finger_left" type="box" pos="0.58 0.04 0" size="0.045 0.008 0.016"
-                  material="arm_titanium" contype="0" conaffinity="0"/>
-            <geom name="ee_finger_right" type="box" pos="0.58 -0.04 0" size="0.045 0.008 0.016"
-                  material="arm_titanium" contype="0" conaffinity="0"/>
+            <geom name="vis_arm_link3_wrist" type="mesh" mesh="arm_link3_wrist" material="aero_white"
+                  contype="0" conaffinity="0" group="0"/>
+            <geom name="vis_arm_gripper" type="mesh" mesh="arm_gripper" material="rcs_dark"
+                  contype="0" conaffinity="0" group="0"/>
 
             <site name="ee_site" pos="0.60 0 0" size="0.025" rgba="0.1 1.0 0.45 0.95"/>
           </body>
@@ -120,10 +139,10 @@
 
     <!-- Mocap floating target satellite for dynamic 3D positioning -->
     <body name="target_satellite" mocap="true" pos="1.35 0.25 0.20">
-      <geom name="target_core" type="sphere" size="0.075" material="target_hull"
-            contype="0" conaffinity="0"/>
-      <geom name="target_ring" type="cylinder" pos="-0.065 0 0" quat="0.707107 0 0.707107 0"
-            size="0.055 0.012" material="gold_mli" contype="0" conaffinity="0"/>
+      <geom name="vis_target_sat_body" type="mesh" mesh="target_sat_body" material="target_hull"
+            contype="0" conaffinity="0" group="0"/>
+      <geom name="vis_target_grapple_fixture" type="mesh" mesh="target_grapple_fixture" material="gold_mli"
+            contype="0" conaffinity="0" group="0"/>
       <site name="target_site" pos="0 0 0" size="0.028" rgba="1.0 0.2 0.2 0.95"/>
     </body>
   </worldbody>

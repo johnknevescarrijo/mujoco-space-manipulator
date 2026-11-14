@@ -1,0 +1,483 @@
+"""FreeCAD Part-workbench macro for the mujoco-space-manipulator 3D CAD assembly.
+
+Usage inside FreeCAD:
+1. Open FreeCAD -> Macro -> Macros... -> select this file -> Execute.
+2. All 13 parametric spacecraft, 3-DoF arm, and target parts are built in
+   millimeters (mm) using FreeCAD's ``Part`` workbench and positioned in an
+   assembled preview matching ``models/space_manipulator.xml``.
+3. Edit any parameter in ``PARAMS`` (or edit individual Part features) and call
+   ``export_all_stl()`` in the FreeCAD Python console (or set
+   ``AUTO_EXPORT_STL = True`` below) to re-export binary STL files in mm
+   directly into ``models/meshes/`` for MuJoCo (``scale="0.001 0.001 0.001"``).
+"""
+
+from __future__ import annotations
+
+import math
+from pathlib import Path
+
+import FreeCAD as App
+import Mesh
+import MeshPart
+import Part
+
+# Set to True to automatically overwrite models/meshes/*.stl when running macro.
+AUTO_EXPORT_STL = False
+
+# Parametric dimensions in millimeters (mm), aligned 1:1 with space_manipulator.xml.
+PARAMS = {
+    "bus_size_mm": 600.0,
+    "bus_chamfer_mm": 85.0,
+    "link1_offset_x_mm": 330.0,
+    "link1_length_mm": 90.0,    # link2 pos = (0.09, 0, 0) m
+    "link2_length_mm": 550.0,   # link3 pos = (0.55, 0, 0) m
+    "link3_boom_mm": 510.0,
+    "ee_site_x_mm": 600.0,      # ee_site pos = (0.60, 0, 0) m in link3
+    "solar_wing_inner_y_mm": 445.0,
+    "solar_wing_outer_y_mm": 1425.0,
+    "solar_wing_width_x_mm": 450.0,
+    "target_preview_pos_mm": (1350.0, 250.0, 200.0),
+    "stl_linear_deflection_mm": 0.4,
+    "stl_angular_deflection_rad": 0.25,
+}
+
+# Body-frame assembly preview placements (world mm) matching space_manipulator.xml.
+ASSEMBLY_PLACEMENTS = {
+    "sat_bus_frame": App.Vector(0.0, 0.0, 0.0),
+    "sat_mli_foil": App.Vector(0.0, 0.0, 0.0),
+    "sat_rcs_thrusters": App.Vector(0.0, 0.0, 0.0),
+    "solar_array_frame": App.Vector(0.0, 0.0, 0.0),
+    "solar_array_cells": App.Vector(0.0, 0.0, 0.0),
+    "arm_link1_housing": App.Vector(330.0, 0.0, 0.0),
+    "arm_link1_accents": App.Vector(330.0, 0.0, 0.0),
+    "arm_link2_housing": App.Vector(420.0, 0.0, 0.0),
+    "arm_link2_accents": App.Vector(420.0, 0.0, 0.0),
+    "arm_link3_wrist": App.Vector(970.0, 0.0, 0.0),
+    "arm_gripper": App.Vector(970.0, 0.0, 0.0),
+    "target_sat_body": App.Vector(*PARAMS["target_preview_pos_mm"]),
+    "target_grapple_fixture": App.Vector(*PARAMS["target_preview_pos_mm"]),
+}
+
+PART_COLORS = {
+    "sat_bus_frame": (0.76, 0.78, 0.82),
+    "sat_mli_foil": (0.88, 0.68, 0.14),
+    "sat_rcs_thrusters": (0.18, 0.20, 0.24),
+    "solar_array_frame": (0.28, 0.30, 0.35),
+    "solar_array_cells": (0.06, 0.15, 0.42),
+    "arm_link1_housing": (0.90, 0.91, 0.93),
+    "arm_link1_accents": (0.85, 0.50, 0.12),
+    "arm_link2_housing": (0.90, 0.91, 0.93),
+    "arm_link2_accents": (0.85, 0.50, 0.12),
+    "arm_link3_wrist": (0.88, 0.89, 0.91),
+    "arm_gripper": (0.20, 0.22, 0.26),
+    "target_sat_body": (0.72, 0.30, 0.18),
+    "target_grapple_fixture": (0.88, 0.68, 0.14),
+}
+
+
+def _oct_wire(half_w: float, half_h: float, chamfer: float, z: float) -> Part.Wire:
+    c = min(chamfer, half_w * 0.95, half_h * 0.95)
+    pts = [
+        App.Vector(half_w - c, -half_h, z),
+        App.Vector(half_w, -half_h + c, z),
+        App.Vector(half_w, half_h - c, z),
+        App.Vector(half_w - c, half_h, z),
+        App.Vector(-half_w + c, half_h, z),
+        App.Vector(-half_w, half_h - c, z),
+        App.Vector(-half_w, -half_h + c, z),
+        App.Vector(-half_w + c, -half_h, z),
+    ]
+    pts.append(pts[0])
+    return Part.makePolygon(pts)
+
+
+def _oct_prism_z(half_w: float, half_h: float, chamfer: float, z0: float, z1: float) -> Part.Shape:
+    wire = _oct_wire(half_w, half_h, chamfer, z0)
+    face = Part.Face(wire)
+    return face.extrude(App.Vector(0.0, 0.0, z1 - z0))
+
+
+def _centered_box(cx: float, cy: float, cz: float, sx: float, sy: float, sz: float) -> Part.Shape:
+    return Part.makeBox(sx, sy, sz, App.Vector(cx - sx * 0.5, cy - sy * 0.5, cz - sz * 0.5))
+
+
+def _ring_along_x(x0: float, length: float, r_in: float, r_out: float) -> Part.Shape:
+    outer = Part.makeCylinder(r_out, length, App.Vector(x0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0))
+    inner = Part.makeCylinder(r_in, length, App.Vector(x0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0))
+    return outer.cut(inner)
+
+
+def _ring_along_z(z0: float, height: float, r_in: float, r_out: float) -> Part.Shape:
+    outer = Part.makeCylinder(r_out, height, App.Vector(0.0, 0.0, z0), App.Vector(0.0, 0.0, 1.0))
+    inner = Part.makeCylinder(r_in, height, App.Vector(0.0, 0.0, z0), App.Vector(0.0, 0.0, 1.0))
+    return outer.cut(inner)
+
+
+def _strut(p0: App.Vector, p1: App.Vector, radius: float) -> Part.Shape:
+    vec = p1 - p0
+    length = vec.Length
+    if length < 1e-6:
+        return Part.Shape()
+    return Part.makeCylinder(radius, length, p0, vec)
+
+
+def build_sat_bus_frame() -> Part.Shape:
+    half = PARAMS["bus_size_mm"] * 0.5
+    chamfer = PARAMS["bus_chamfer_mm"]
+    shapes = [
+        _oct_prism_z(half, half, chamfer, -half, half),
+        _oct_prism_z(half + 6.0, half + 6.0, chamfer + 1.0, half - 14.0, half + 4.0),
+        _oct_prism_z(half + 6.0, half + 6.0, chamfer + 1.0, -half - 4.0, -half + 14.0),
+    ]
+    for sx in (-1.0, 1.0):
+        for sy in (-1.0, 1.0):
+            shapes.append(_centered_box(sx * 255.0, sy * 255.0, 0.0, 24.0, 24.0, 590.0))
+
+    # +X front manipulator adapter ring
+    shapes.append(_ring_along_x(300.0, 14.0, 76.0, 145.0))
+    shapes.append(
+        Part.makeCone(86.0, 64.0, 20.0, App.Vector(310.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0))
+    )
+
+    # High-Gain Parabolic Antenna (HGA) on +Z deck
+    shapes.append(
+        Part.makeCone(26.0, 20.0, 115.0, App.Vector(-115.0, -70.0, 300.0), App.Vector(0.0, 0.0, 1.0))
+    )
+    shapes.append(_centered_box(-115.0, -70.0, 422.0, 46.0, 56.0, 36.0))
+    dish_outer = Part.makeCone(24.0, 165.0, 44.0)
+    dish_inner = Part.makeCone(20.0, 158.0, 44.0, App.Vector(0.0, 0.0, 7.0))
+    dish = dish_outer.cut(dish_inner)
+    dish.Placement = App.Placement(App.Vector(-100.0, -55.0, 445.0), App.Rotation(24.0, 26.0, 0.0))
+    shapes.append(dish)
+
+    # Dual baffled Star Trackers on +Z deck
+    for sy in (-1.0, 1.0):
+        st_box = _centered_box(0.0, 0.0, 18.0, 54.0, 54.0, 36.0)
+        st_baffle = Part.makeCone(22.0, 34.0, 60.0, App.Vector(0.0, 0.0, 36.0))
+        st = Part.makeCompound([st_box, st_baffle])
+        st.Placement = App.Placement(
+            App.Vector(135.0, sy * 145.0, 304.0),
+            App.Rotation(0.0, 16.0, -sy * 24.0),
+        )
+        shapes.append(st)
+
+    # S-band omni mast
+    shapes.append(
+        Part.makeCone(14.0, 9.0, 95.0, App.Vector(-185.0, 155.0, 300.0), App.Vector(0.0, 0.0, 1.0))
+    )
+    return Part.makeCompound(shapes)
+
+
+def build_sat_mli_foil() -> Part.Shape:
+    shapes = []
+    # Back -X panel
+    shapes.append(_centered_box(-304.0, 0.0, 0.0, 8.0, 420.0, 420.0))
+    # +X perimeter blankets around adapter ring
+    for y0, z0, bw, bh in [
+        (0.0, 195.0, 380.0, 95.0),
+        (0.0, -195.0, 380.0, 95.0),
+        (195.0, 0.0, 95.0, 270.0),
+        (-195.0, 0.0, 95.0, 270.0),
+    ]:
+        shapes.append(_centered_box(304.0, y0, z0, 8.0, bw, bh))
+    # +/-Y panels
+    for sy in (-1.0, 1.0):
+        for ox in (-155.0, 155.0):
+            shapes.append(_centered_box(ox, sy * 304.0, 0.0, 130.0, 8.0, 400.0))
+        for oz in (-165.0, 165.0):
+            shapes.append(_centered_box(0.0, sy * 304.0, oz, 160.0, 8.0, 105.0))
+    # +/-Z panels
+    shapes.append(_centered_box(45.0, 0.0, -304.0, 340.0, 360.0, 8.0))
+    shapes.append(_centered_box(15.0, 40.0, 304.0, 210.0, 210.0, 8.0))
+    # 4 diagonal chamfered faces
+    diag_dist = 257.5 * math.sqrt(2.0) + 4.5
+    for k in range(4):
+        ang_deg = 45.0 + k * 90.0
+        ang_rad = math.radians(ang_deg)
+        panel = _centered_box(0.0, 0.0, 0.0, 8.0, 92.0, 440.0)
+        panel.Placement = App.Placement(
+            App.Vector(diag_dist * math.cos(ang_rad), diag_dist * math.sin(ang_rad), 0.0),
+            App.Rotation(App.Vector(0.0, 0.0, 1.0), ang_deg),
+        )
+        shapes.append(panel)
+    return Part.makeCompound(shapes)
+
+
+def build_sat_rcs_thrusters() -> Part.Shape:
+    shapes = []
+    for sx in (-1.0, 1.0):
+        for sy in (-1.0, 1.0):
+            for sz in (-1.0, 1.0):
+                cx, cy, cz = sx * 262.0, sy * 262.0, sz * 274.0
+                shapes.append(_centered_box(cx, cy, cz, 54.0, 54.0, 54.0))
+                center = App.Vector(cx, cy, cz)
+                for axis in (
+                    App.Vector(sx, 0.0, 0.0),
+                    App.Vector(0.0, sy, 0.0),
+                    App.Vector(0.0, 0.0, sz),
+                ):
+                    throat = Part.makeCone(14.0, 10.0, 10.0, center + axis * 24.0, axis)
+                    bell = Part.makeCone(10.0, 20.0, 30.0, center + axis * 34.0, axis)
+                    shapes.extend([throat, bell])
+    return Part.makeCompound(shapes)
+
+
+def build_solar_array_frame() -> Part.Shape:
+    shapes = []
+    y_in_base = PARAMS["solar_wing_inner_y_mm"]
+    y_out_base = PARAMS["solar_wing_outer_y_mm"]
+    half_w = PARAMS["solar_wing_width_x_mm"] * 0.5
+    for sy in (-1.0, 1.0):
+        shapes.append(
+            Part.makeCone(56.0, 48.0, 42.0, App.Vector(0.0, sy * 298.0, 0.0), App.Vector(0.0, sy, 0.0))
+        )
+        p_hub = App.Vector(0.0, sy * 355.0, 0.0)
+        for px in (-175.0, 0.0, 175.0):
+            shapes.append(_strut(p_hub, App.Vector(px, sy * (y_in_base + 5.0), 0.0), 10.0))
+
+        y_in = sy * y_in_base
+        y_out = sy * y_out_base
+        y_mid = 0.5 * (y_in + y_out)
+        wlen = abs(y_out - y_in)
+        for sx in (-1.0, 1.0):
+            shapes.append(_centered_box(sx * half_w, y_mid, 0.0, 16.0, wlen, 20.0))
+        shapes.append(_centered_box(0.0, y_mid, 0.0, 14.0, wlen, 22.0))
+        for k in range(5):
+            yk = y_in + (y_out - y_in) * (k / 4.0)
+            shapes.append(_centered_box(0.0, yk, 0.0, PARAMS["solar_wing_width_x_mm"] + 16.0, 16.0, 20.0))
+    return Part.makeCompound(shapes)
+
+
+def build_solar_array_cells() -> Part.Shape:
+    shapes = []
+    for sy in (-1.0, 1.0):
+        y_in = sy * 455.0
+        step_y = sy * 240.0
+        for row in range(4):
+            yc = y_in + (row + 0.5) * step_y
+            for col_x in (-112.0, 112.0):
+                shapes.append(_centered_box(col_x, yc, 0.0, 202.0, 222.0, 24.0))
+                shapes.append(_centered_box(col_x, yc, 13.5, 186.0, 206.0, 3.0))
+                shapes.append(_centered_box(col_x, yc, -13.5, 186.0, 206.0, 3.0))
+    return Part.makeCompound(shapes)
+
+
+def build_arm_link1_housing() -> Part.Shape:
+    l1 = PARAMS["link1_length_mm"]
+    shapes = [
+        Part.makeCylinder(62.0, 112.0, App.Vector(0.0, 0.0, -56.0), App.Vector(0.0, 0.0, 1.0)),
+        _centered_box(22.0, 0.0, 0.0, 68.0, 96.0, 88.0),
+    ]
+    for sy in (-1.0, 1.0):
+        shapes.append(_centered_box(66.0, sy * 56.0, 0.0, 88.0, 20.0, 94.0))
+        shapes.append(
+            Part.makeCylinder(
+                48.0, 22.0, App.Vector(l1, sy * 56.0 - 11.0, 0.0), App.Vector(0.0, 1.0, 0.0)
+            )
+        )
+    return Part.makeCompound(shapes)
+
+
+def build_arm_link1_accents() -> Part.Shape:
+    l1 = PARAMS["link1_length_mm"]
+    shapes = [
+        _ring_along_z(40.0, 10.0, 60.0, 66.0),
+        _ring_along_z(-50.0, 10.0, 60.0, 66.0),
+    ]
+    for sy in (-1.0, 1.0):
+        shapes.append(
+            Part.makeCone(
+                30.0, 24.0, 10.0, App.Vector(l1, sy * 66.0, 0.0), App.Vector(0.0, sy, 0.0)
+            )
+        )
+        shapes.append(
+            _strut(App.Vector(0.0, sy * 64.0, -sy * 32.0), App.Vector(82.0, sy * 68.0, -sy * 14.0), 5.5)
+        )
+    return Part.makeCompound(shapes)
+
+
+def build_arm_link2_housing() -> Part.Shape:
+    l2 = PARAMS["link2_length_mm"]
+    shapes = [
+        Part.makeCylinder(54.0, 88.0, App.Vector(0.0, -44.0, 0.0), App.Vector(0.0, 1.0, 0.0)),
+        _centered_box(42.0, 0.0, 0.0, 76.0, 82.0, 86.0),
+        Part.makeCone(43.0, 37.0, 410.0, App.Vector(75.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+        _centered_box(485.0, 0.0, 0.0, 44.0, 96.0, 78.0),
+    ]
+    for sy in (-1.0, 1.0):
+        shapes.append(_centered_box(l2 - 24.0, sy * 46.0, 0.0, 78.0, 18.0, 78.0))
+        shapes.append(
+            Part.makeCylinder(
+                42.0, 18.0, App.Vector(l2, sy * 46.0 - 9.0, 0.0), App.Vector(0.0, 1.0, 0.0)
+            )
+        )
+    return Part.makeCompound(shapes)
+
+
+def build_arm_link2_accents() -> Part.Shape:
+    l2 = PARAMS["link2_length_mm"]
+    shapes = []
+    for x_pos, r_in, r_out in [
+        (82.0, 42.0, 50.0),
+        (210.0, 40.0, 48.0),
+        (345.0, 38.0, 46.0),
+        (468.0, 36.5, 45.0),
+    ]:
+        shapes.append(_ring_along_x(x_pos, 16.0, r_in, r_out))
+    for sy in (-1.0, 1.0):
+        shapes.append(
+            Part.makeCone(
+                26.0, 20.0, 8.0, App.Vector(l2, sy * 55.0, 0.0), App.Vector(0.0, sy, 0.0)
+            )
+        )
+        shapes.append(
+            _strut(App.Vector(55.0, sy * 22.0, 45.0), App.Vector(485.0, sy * 20.0, 42.0), 4.8)
+        )
+    return Part.makeCompound(shapes)
+
+
+def build_arm_link3_wrist() -> Part.Shape:
+    boom_len = PARAMS["link3_boom_mm"]
+    shapes = [
+        Part.makeCylinder(46.0, 70.0, App.Vector(0.0, -35.0, 0.0), App.Vector(0.0, 1.0, 0.0)),
+        _centered_box(36.0, 0.0, 0.0, 64.0, 66.0, 74.0),
+        Part.makeCone(36.0, 32.0, boom_len - 65.0, App.Vector(65.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+    ]
+    for x_pos in (165.0, 325.0, 475.0):
+        shapes.append(_ring_along_x(x_pos, 14.0, 33.0, 41.0))
+    # Wrist inspection camera
+    shapes.append(_centered_box(460.0, 0.0, 38.0, 34.0, 32.0, 20.0))
+    shapes.append(_centered_box(465.0, 0.0, 58.0, 64.0, 44.0, 30.0))
+    shapes.append(
+        Part.makeCone(13.0, 15.0, 23.0, App.Vector(495.0, 0.0, 58.0), App.Vector(1.0, 0.0, 0.0))
+    )
+    return Part.makeCompound(shapes)
+
+
+def build_arm_gripper() -> Part.Shape:
+    ee_x = PARAMS["ee_site_x_mm"]
+    shapes = [
+        Part.makeCone(36.0, 52.0, 18.0, App.Vector(510.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+        _ring_along_x(528.0, 22.0, 26.0, 56.0),
+        _ring_along_x(562.0, 10.0, 46.0, 54.0),
+    ]
+    for k in range(3):
+        ang_deg = k * 120.0 + 30.0
+        knuckle = _centered_box(564.0, 0.0, 46.0, 40.0, 22.0, 18.0)
+        jaw = _centered_box(ee_x + 4.0, 0.0, 38.0, 54.0, 18.0, 13.0)
+        finger = Part.makeCompound([knuckle, jaw])
+        finger.Placement = App.Placement(App.Vector(0.0, 0.0, 0.0), App.Rotation(App.Vector(1.0, 0.0, 0.0), ang_deg))
+        shapes.append(finger)
+    return Part.makeCompound(shapes)
+
+
+def build_target_sat_body() -> Part.Shape:
+    shapes = [
+        Part.makeCylinder(98.0, 183.0, App.Vector(52.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+        Part.makeCone(98.0, 78.0, 27.0, App.Vector(235.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+        Part.makeCone(74.0, 98.0, 12.0, App.Vector(44.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+    ]
+    for sy in (-1.0, 1.0):
+        shapes.append(_strut(App.Vector(145.0, sy * 92.0, 0.0), App.Vector(145.0, sy * 125.0, 0.0), 8.0))
+        shapes.append(_centered_box(145.0, sy * 215.0, 0.0, 105.0, 180.0, 10.0))
+    shapes.append(
+        Part.makeCone(10.0, 6.0, 75.0, App.Vector(175.0, 0.0, 90.0), App.Vector(0.0, 0.0, 1.0))
+    )
+    shapes.append(
+        Part.makeCone(22.0, 26.0, 10.0, App.Vector(175.0, 0.0, 165.0), App.Vector(0.0, 0.0, 1.0))
+    )
+    return Part.makeCompound(shapes)
+
+
+def build_target_grapple_fixture() -> Part.Shape:
+    shapes = [
+        Part.makeCone(68.0, 32.0, 28.0, App.Vector(20.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+        _ring_along_x(16.0, 6.0, 56.0, 72.0),
+        Part.makeCylinder(9.0, 44.0, App.Vector(-8.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+        Part.makeCylinder(16.0, 12.0, App.Vector(-14.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+        Part.makeCone(8.0, 16.0, 6.0, App.Vector(-20.0, 0.0, 0.0), App.Vector(1.0, 0.0, 0.0)),
+    ]
+    for k in range(3):
+        tab = _centered_box(22.0, 0.0, 44.0, 16.0, 10.0, 28.0)
+        tab.Placement = App.Placement(App.Vector(0.0, 0.0, 0.0), App.Rotation(App.Vector(1.0, 0.0, 0.0), k * 120.0))
+        shapes.append(tab)
+    return Part.makeCompound(shapes)
+
+
+PART_BUILDERS = {
+    "sat_bus_frame": build_sat_bus_frame,
+    "sat_mli_foil": build_sat_mli_foil,
+    "sat_rcs_thrusters": build_sat_rcs_thrusters,
+    "solar_array_frame": build_solar_array_frame,
+    "solar_array_cells": build_solar_array_cells,
+    "arm_link1_housing": build_arm_link1_housing,
+    "arm_link1_accents": build_arm_link1_accents,
+    "arm_link2_housing": build_arm_link2_housing,
+    "arm_link2_accents": build_arm_link2_accents,
+    "arm_link3_wrist": build_arm_link3_wrist,
+    "arm_gripper": build_arm_gripper,
+    "target_sat_body": build_target_sat_body,
+    "target_grapple_fixture": build_target_grapple_fixture,
+}
+
+
+def build_document(doc_name: str = "SpaceManipulatorCAD") -> App.Document:
+    """Create or rebuild the FreeCAD document containing all 13 parametric solids."""
+    if doc_name in App.listDocuments():
+        App.closeDocument(doc_name)
+    doc = App.newDocument(doc_name)
+
+    for name, builder in PART_BUILDERS.items():
+        obj = doc.addObject("Part::Feature", name)
+        obj.Shape = builder()
+        obj.Placement = App.Placement(ASSEMBLY_PLACEMENTS[name], App.Rotation())
+        if App.GuiUp and hasattr(obj, "ViewObject") and obj.ViewObject is not None:
+            obj.ViewObject.ShapeColor = PART_COLORS[name]
+
+    doc.recompute()
+    if App.GuiUp:
+        import FreeCADGui as Gui
+        Gui.SendMsgToActiveView("ViewFit")
+    return doc
+
+
+def export_all_stl(
+    doc: App.Document | None = None,
+    output_dir: str | Path | None = None,
+) -> list[Path]:
+    """Export each Part feature in its body-local frame as a binary STL (mm)."""
+    active_doc = doc if doc is not None else App.ActiveDocument
+    if active_doc is None:
+        raise RuntimeError("No active FreeCAD document found. Run build_document() first.")
+
+    target_dir = Path(output_dir) if output_dir is not None else Path(__file__).resolve().parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    exported: list[Path] = []
+    lin_defl = float(PARAMS["stl_linear_deflection_mm"])
+    ang_defl = float(PARAMS["stl_angular_deflection_rad"])
+
+    for name in PART_BUILDERS:
+        obj = active_doc.getObject(name)
+        if obj is None:
+            continue
+        # Reset Placement on a copy so STL coordinates stay in the MuJoCo body-local frame (mm).
+        local_shape = obj.Shape.copy()
+        local_shape.Placement = App.Placement()
+        mesh_obj = MeshPart.meshFromShape(
+            Shape=local_shape,
+            LinearDeflection=lin_defl,
+            AngularDeflection=ang_defl,
+            Relative=False,
+        )
+        out_path = target_dir / f"{name}.stl"
+        mesh_obj.write(str(out_path))
+        exported.append(out_path)
+    return exported
+
+
+if __name__ == "__main__":
+    cad_doc = build_document()
+    if AUTO_EXPORT_STL:
+        files = export_all_stl(cad_doc)
+        App.Console.PrintMessage(f"Exported {len(files)} STL files in mm.\n")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import warnings
 
 import mujoco
@@ -21,6 +22,11 @@ from space_manipulator import (
     read_sensor,
     reset_state,
     set_target_pose,
+)
+from space_manipulator.mesh_generator import (
+    DEFAULT_MESH_DIR,
+    MESH_FILENAMES,
+    generate_all_meshes,
 )
 
 
@@ -134,3 +140,34 @@ def test_free_flying_base_thruster_actuation() -> None:
     base_linvel = read_sensor(model, data, "base_linvel")
     assert base_pos[0] > 0.04
     assert base_linvel[0] > 0.15
+
+
+def test_cad_stl_meshes_loaded_in_mjmodel(tmp_path: Path) -> None:
+    model, _ = load_model()
+
+    assert model.nmesh >= 10
+    assert model.nmesh == len(MESH_FILENAMES)
+
+    for filename in MESH_FILENAMES:
+        stl_path = DEFAULT_MESH_DIR / filename
+        assert stl_path.is_file()
+        assert stl_path.stat().st_size > 84
+
+        mesh_name = stl_path.stem
+        mesh_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MESH, mesh_name)
+        assert mesh_id >= 0
+        assert model.mesh_facenum[mesh_id] > 0
+
+        geom_id = mujoco.mj_name2id(
+            model, mujoco.mjtObj.mjOBJ_GEOM, f"vis_{mesh_name}"
+        )
+        assert geom_id >= 0
+        assert model.geom_contype[geom_id] == 0
+        assert model.geom_conaffinity[geom_id] == 0
+
+    generated = generate_all_meshes(tmp_path)
+    assert set(generated.keys()) == set(MESH_FILENAMES)
+    for stats in generated.values():
+        assert stats.path.is_file()
+        assert stats.triangle_count > 0
+
