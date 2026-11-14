@@ -7,6 +7,21 @@
 [![Tests](https://img.shields.io/badge/Tests-15%20Passing-brightgreen)](#running-tests)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](#license)
 
+<p align="center">
+  <img src="docs/images/mujoco_overview.png" alt="MuJoCo Space Manipulator Overview" width="90%">
+</p>
+
+---
+
+## Visual Showcase
+
+### 3D CAD Modeling in MuJoCo
+
+| Spacecraft Bus & RCS Close-Up | Free-Floating Grapple Capture (`0g`) |
+| :---: | :---: |
+| <img src="docs/images/mujoco_spacecraft_closeup.png" alt="Spacecraft Bus Close-Up" width="100%"> | <img src="docs/images/mujoco_capture_maneuver.png" alt="Free-Floating Capture Maneuver" width="100%"> |
+| *Octagonal bus, gold MLI thermal blankets, 24 de Laval RCS nozzles, star trackers, HGA parabolic dish, and 3-DoF arm shoulder.* | *3-finger end-effector converging on the target grapple fixture via GJM ($J^*$) while the spacecraft base reacts naturally in microgravity.* |
+
 ---
 
 ## Overview
@@ -99,6 +114,10 @@ Results measured directly from the headless comparison benchmark (`duration = 8.
 | **`max_\|\|L\|\|`** | **`8.12e-10 N·m·s`** | `1.35e+00 N·m·s` | Peak total angular momentum about the system COM; conserved at numerical zero in free-floating, injected by RCS in free-flying. |
 | **`com_drift`** | **`0.0000 mm`** | `32.1620 mm` | Maximum excursion of the combined spacecraft COM; invariant under purely internal joint torques. |
 
+<p align="center">
+  <img src="docs/images/telemetry_comparison.png" alt="Free-Floating vs Free-Flying Telemetry Comparison" width="90%">
+</p>
+
 ---
 
 ## 3D CAD Architecture & FreeCAD Integration
@@ -146,6 +165,8 @@ python -m space_manipulator.mesh_generator
 
 ```text
 mujoco-space-manipulator/
+├── docs/
+│   └── images/                                # MuJoCo 3D renders and telemetry comparison plots
 ├── models/
 │   ├── meshes/
 │   │   ├── freecad_space_manipulator.FCMacro  # Parametric FreeCAD Part-workbench CAD macro
