@@ -19,6 +19,9 @@ dev = [
     "pytest>=7.0.0",
 ]
 
+[project.scripts]
+space-manipulator = "space_manipulator.sim:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

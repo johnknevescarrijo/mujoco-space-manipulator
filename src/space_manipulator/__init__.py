@@ -37,6 +37,12 @@ from space_manipulator.model_loader import (
     reset_state,
     set_target_pose,
 )
+from space_manipulator.sim import (
+    SimulationTelemetry,
+    plot_comparison,
+    plot_telemetry,
+    run_simulation,
+)
 
 __all__ = [
     "ARM_ACTUATOR_NAMES",
@@ -52,6 +58,7 @@ __all__ = [
     "GeneralizedJacobian",
     "ModelIndices",
     "PartitionedMassMatrix",
+    "SimulationTelemetry",
     "SpaceManipulatorController",
     "compute_generalized_jacobian",
     "compute_mass_matrix",
@@ -64,10 +71,13 @@ __all__ = [
     "load_model",
     "normalize_quaternion",
     "orientation_error",
+    "plot_comparison",
+    "plot_telemetry",
     "quaternion_conjugate",
     "quaternion_multiply",
     "read_all_sensors",
     "read_sensor",
     "reset_state",
+    "run_simulation",
     "set_target_pose",
 ]
