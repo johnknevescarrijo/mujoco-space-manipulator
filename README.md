@@ -20,7 +20,7 @@
 | Spacecraft Bus & RCS Close-Up | Free-Floating Grapple Capture (`0g`) |
 | :---: | :---: |
 | <img src="docs/images/mujoco_spacecraft_closeup.png" alt="Spacecraft Bus Close-Up" width="100%"> | <img src="docs/images/mujoco_capture_maneuver.png" alt="Free-Floating Capture Maneuver" width="100%"> |
-| *Octagonal bus, gold MLI thermal blankets, 24 de Laval RCS nozzles, star trackers, HGA parabolic dish, and 3-DoF arm shoulder.* | *3-finger end-effector converging on the target grapple fixture via GJM ($J^*$) while the spacecraft base reacts naturally in microgravity.* |
+| *Octagonal bus, gold MLI thermal blankets, 24 de Laval RCS nozzles, star trackers, HGA parabolic dish, and 3-DoF arm shoulder.* | *3-finger end-effector converging on the target grapple fixture via Generalized Jacobian (GJM) while the spacecraft base reacts naturally in microgravity.* |
 
 ---
 
@@ -30,13 +30,13 @@
 
 Unlike fixed-base terrestrial manipulators, moving a robotic arm in microgravity induces dynamic reaction forces and torques on the spacecraft bus. This repository implements, benchmarks, and visualizes the two canonical orbital control regimes:
 
-- **Free-Floating Mode (`u_base = 0`):** Reaction thrusters and momentum wheels are off. The spacecraft base translates and rotates freely in reaction to arm motion while conserving total linear momentum ($P$), angular momentum ($L$), and system center of mass (COM). End-effector convergence is achieved via the **Generalized Jacobian Matrix (GJM, $J^*$)**.
-- **Free-Flying Mode (Active 6-DoF Base Control):** Base thrusters and attitude actuators (`base_fx..tz`) actively regulate position and quaternion attitude at `base_imu_site` while the manipulator tracks the target using the conventional manipulator Jacobian ($J_m$).
+- **Free-Floating Mode (`u_base = 0`):** Reaction thrusters and momentum wheels are off. The spacecraft base translates and rotates freely in reaction to arm motion while conserving total linear momentum (`P`), angular momentum (`L`), and system center of mass (COM). End-effector convergence is achieved via the **Generalized Jacobian Matrix (GJM, `J*`)**.
+- **Free-Flying Mode (Active 6-DoF Base Control):** Base thrusters and attitude actuators (`base_fx..tz`) actively regulate position and quaternion attitude at `base_imu_site` while the manipulator tracks the target using the conventional manipulator Jacobian (`J_m`).
 
 ### Key Features
 
 - **Zero-Gravity Orbital Physics:** Configured in `models/space_manipulator.xml` with `gravity="0 0 0"`, `timestep="0.002"` s (500 Hz), and 4th-order Runge-Kutta (`RK4`) integration.
-- **Exact Dynamic Coupling & GJM Control:** Computes the full $9 \times 9$ mass matrix via `mj_fullM`, partitions base/arm blocks ($H_b, H_{bm}, H_m$), and solves the Generalized Jacobian $J^* = J_m - J_b H_b^{-1} H_{bm}$ with Damped Least Squares (DLS) pseudoinversion and nonlinear `qfrc_bias` compensation.
+- **Exact Dynamic Coupling & GJM Control:** Computes the full `9×9` mass matrix via `mj_fullM`, partitions base/arm blocks (`H_b`, `H_bm`, `H_m`), and solves the Generalized Jacobian `J* = J_m - J_b H_b⁻¹ H_bm` with Damped Least Squares (DLS) pseudoinversion and nonlinear `qfrc_bias` compensation.
 - **6-DoF Quaternion Attitude Control:** Computes shortest-path body-frame axis-angle orientation errors directly from unit quaternions (`[w, x, y, z]`) for `free-flying` station-keeping.
 - **Aerospace 3D CAD Assets & FreeCAD Workflow:** Includes 13 binary `.stl` meshes (modeled in millimeters, scaled `0.001` in MJCF) featuring gold MLI blankets, 24 de Laval RCS nozzles, SADA-mounted solar wings, a Canadarm2/SSRMS-inspired 3-DoF arm, and a target satellite with a grapple fixture—paired with a parametric FreeCAD macro and a standalone Python mesh generator.
 - **Telemetry & Benchmarking Suite:** Interactive 3D MuJoCo passive viewer, headless CLI benchmark runner, Matplotlib single-mode and side-by-side comparison plots, and automated `pytest` verification.
@@ -49,55 +49,78 @@ Unlike fixed-base terrestrial manipulators, moving a robotic arm in microgravity
 
 Consider the 9-DoF orbital system consisting of a 6-DoF floating base (`base_freejoint`) and a 3-DoF serial arm (`joint1`, `joint2`, `joint3`). In microgravity with zero external environmental disturbances, the coupled equations of motion are:
 
-$$
-\begin{bmatrix} H_b & H_{bm} \\ H_{bm}^T & H_m \end{bmatrix}
-\begin{bmatrix} \ddot{x}_b \\ \ddot{q}_m \end{bmatrix} +
-\begin{bmatrix} c_b \\ c_m \end{bmatrix} =
-\begin{bmatrix} F_b \\ \tau_m \end{bmatrix}
-$$
+```math
+\begin{bmatrix}
+H_b & H_{bm} \\
+H_{bm}^T & H_m
+\end{bmatrix}
+\begin{bmatrix}
+\ddot{x}_b \\
+\ddot{q}_m
+\end{bmatrix}
++
+\begin{bmatrix}
+c_b \\
+c_m
+\end{bmatrix}
+=
+\begin{bmatrix}
+F_b \\
+\tau_m
+\end{bmatrix}
+```
 
 where:
-- $H_b \in \mathbb{R}^{6 \times 6}$ is the base inertia matrix, $H_m \in \mathbb{R}^{3 \times 3}$ is the manipulator inertia matrix, and $H_{bm} \in \mathbb{R}^{6 \times 3}$ is the dynamic coupling matrix between base and arm.
-- $\dot{x}_b = [v_b^T, \omega_b^T]^T \in \mathbb{R}^6$ and $\dot{q}_m \in \mathbb{R}^3$ are the base and joint velocity vectors.
-- $c_b \in \mathbb{R}^6$ and $c_m \in \mathbb{R}^3$ are the nonlinear Coriolis and centrifugal bias forces (`data.qfrc_bias` in MuJoCo).
-- $F_b \in \mathbb{R}^6$ is the base control wrench (`base_fx..tz`) and $\tau_m \in \mathbb{R}^3$ is the vector of arm joint torques (`act_joint1..3`).
+- `H_b` (6×6) is the base inertia matrix.
+- `H_m` (3×3) is the manipulator inertia matrix.
+- `H_bm` (6×3) is the dynamic coupling matrix between the spacecraft base and the arm.
+- `ẋ_b = [v_bᵀ, ω_bᵀ]ᵀ` (6×1) and `q̇_m` (3×1) are the base twist and joint velocity vectors.
+- `c_b` (6×1) and `c_m` (3×1) are the nonlinear Coriolis and centrifugal bias forces (`data.qfrc_bias` in MuJoCo).
+- `F_b` (6×1) is the base control wrench (`base_fx..tz`) and `τ_m` (3×1) is the vector of arm joint torques (`act_joint1..3`).
 
 ### 2. Generalized Jacobian Matrix (GJM) — Free-Floating Mode
 
-In **free-floating** operation ($F_b = 0$), no external forces or torques act on the spacecraft. Starting from rest with zero initial linear and angular momentum, total system momentum remains zero throughout the maneuver:
+In **free-floating** operation (`F_b = 0`), no external forces or torques act on the spacecraft. Starting from rest with zero initial linear and angular momentum, total system momentum remains zero throughout the maneuver:
 
-$$
+```math
 H_b \dot{x}_b + H_{bm} \dot{q}_m = 0 \implies \dot{x}_b = -H_b^{-1} H_{bm} \dot{q}_m
-$$
+```
 
-Partitioning the inertial end-effector (`ee_site`) translational Jacobian into base ($J_b \in \mathbb{R}^{3 \times 6}$) and manipulator ($J_m \in \mathbb{R}^{3 \times 3}$) components yields:
+Partitioning the inertial end-effector (`ee_site`) translational Jacobian into base (`J_b`, 3×6) and manipulator (`J_m`, 3×3) components yields:
 
-$$
+```math
 \dot{x}_{ee} = J_b \dot{x}_b + J_m \dot{q}_m = \left(J_m - J_b H_b^{-1} H_{bm}\right) \dot{q}_m = J^* \dot{q}_m
-$$
+```
 
-where $J^* \in \mathbb{R}^{3 \times 3}$ is the **Generalized Jacobian Matrix (GJM)**. In `space_manipulator.kinematics.compute_generalized_jacobian`, $-H_b^{-1} H_{bm}$ is evaluated numerically via `np.linalg.solve(H_b, H_bm)` rather than explicit matrix inversion.
+where `J*` (3×3) is the **Generalized Jacobian Matrix (GJM)**. In `space_manipulator.kinematics.compute_generalized_jacobian`, the coupling term `-H_b⁻¹ H_bm` is evaluated numerically via `np.linalg.solve(H_b, H_bm)` rather than explicit matrix inversion.
 
 ### 3. Task-Space DLS Control & 6-DoF Base Station-Keeping
 
-Given target position $x_{\text{target}}$ and current end-effector position $x_{ee}$, the desired task-space velocity is clamped to `max_ee_speed = 0.6` m/s (`kp_task = 4.0`):
+Given target position `x_target` and current end-effector position `x_ee`, the desired task-space velocity is clamped to `max_ee_speed = 0.6` m/s (`kp_task = 4.0`):
 
-$$
-\dot{x}_{ee,\text{des}} = \operatorname{clamp}\!\left(k_{p,\text{task}} (x_{\text{target}} - x_{ee}),\; v_{\max}\right)
-$$
+```math
+\dot{x}_{ee,\mathrm{des}} = \mathrm{clamp}\left(k_{p,\mathrm{task}} (x_{\mathrm{target}} - x_{ee}), \quad v_{\max}\right)
+```
 
-Desired joint velocities $\dot{q}_{m,\text{des}}$ are computed via the **Damped Least Squares (DLS)** pseudoinverse ($\lambda = 0.04$) for singularity robustness, and mapped to joint torques with nonlinear bias compensation (`kv_joint = 14.0`, `kd_joint = 1.0`):
+Desired joint velocities are computed via the **Damped Least Squares (DLS)** pseudoinverse (`λ = 0.04`) for singularity robustness, and mapped to joint torques with nonlinear bias compensation (`kv_joint = 14.0`, `kd_joint = 1.0`):
 
-$$
-J^{\#}_{\text{DLS}} = J^T \left(J J^T + \lambda^2 I_3\right)^{-1}, \qquad
-\dot{q}_{m,\text{des}} = J^{\#}_{\text{DLS}} \dot{x}_{ee,\text{des}}, \qquad
-\tau_m = k_v \left(\dot{q}_{m,\text{des}} - \dot{q}_m\right) - k_d \dot{q}_m + c_m
-$$
+```math
+J^{\dagger}_{\mathrm{DLS}} = J^T \left(J J^T + \lambda^2 I_3\right)^{-1}, \qquad
+\dot{q}_{m,\mathrm{des}} = J^{\dagger}_{\mathrm{DLS}} \dot{x}_{ee,\mathrm{des}}, \qquad
+\tau_m = k_v \left(\dot{q}_{m,\mathrm{des}} - \dot{q}_m\right) - k_d \dot{q}_m + c_m
+```
 
-- **Free-Floating (`mode="free-floating"`):** Uses $J = J^*$ and sets $F_b = 0$.
-- **Free-Flying (`mode="free-flying"`):** Uses $J = J_m$ and drives the 6-DoF base actuators at `base_imu_site` (clipped to $\pm 50\text{ N}$ and $\pm 20\text{ N}\cdot\text{m}$):
-  - *Translation:* $F_{\text{local}} = R_b^T \left(k_{p,\text{pos}}(p_{\text{ref}} - p_b) - k_{d,\text{pos}} v_b + c_{b,\text{lin}}\right)$, with $k_{p,\text{pos}} = 400.0$, $k_{d,\text{pos}} = 180.0$.
-  - *Attitude:* Body-frame shortest-path axis-angle error $e_\theta = \operatorname{log}(q_b^* \otimes q_{\text{ref}})$ drives $\tau_{\text{local}} = k_{p,\text{att}} e_\theta - k_{d,\text{att}} \omega_b + c_{b,\text{ang}}$, with $k_{p,\text{att}} = 120.0$, $k_{d,\text{att}} = 35.0$.
+- **Free-Floating (`mode="free-floating"`):** Uses `J = J*` and sets `F_b = 0`.
+- **Free-Flying (`mode="free-flying"`):** Uses `J = J_m` and drives the 6-DoF base actuators at `base_imu_site` (clipped to `±50 N` and `±20 N·m`), with translation gains `kp_pos = 400.0`, `kd_pos = 180.0` and attitude gains `kp_att = 120.0`, `kd_att = 35.0`:
+
+```math
+F_{\mathrm{local}} = R_b^T \left(k_{p,\mathrm{pos}}(p_{\mathrm{ref}} - p_b) - k_{d,\mathrm{pos}} v_b + c_{b,\mathrm{lin}}\right)
+```
+
+```math
+e_\theta = \mathrm{Log}\left(q_b^* \otimes q_{\mathrm{ref}}\right), \qquad
+\tau_{\mathrm{local}} = k_{p,\mathrm{att}} e_\theta - k_{d,\mathrm{att}} \omega_b + c_{b,\mathrm{ang}}
+```
 
 ---
 
@@ -109,7 +132,7 @@ Results measured directly from the headless comparison benchmark (`duration = 8.
 | :--- | :---: | :---: | :--- |
 | **`final_ee_err`** | **`0.0000 cm`** | `0.0002 cm` | Final Euclidean distance between `ee_site` and `target_site`; both modes achieve sub-millimeter target capture. |
 | **`base_drift` (final / max)** | `23.99 / 23.99 mm` | **`0.00 / 4.99 mm`** | Bus translation from origin; free-floating recoils as the arm extends, while RCS thrusters arrest drift in free-flying. |
-| **`base_rot_final`** | `9.558 deg` | **`0.000 deg`** | Final attitude error relative to initial quaternion; GJM accounts for this $9.558^\circ$ base rotation during target tracking. |
+| **`base_rot_final`** | `9.558 deg` | **`0.000 deg`** | Final attitude error relative to initial quaternion; GJM accounts for this `9.558°` base rotation during target tracking. |
 | **`max_\|\|P\|\|`** | **`1.98e-08 kg·m/s`** | `1.62e+00 kg·m/s` | Peak total linear momentum of the spacecraft subtree (`base_sat` + arm); conserved at numerical zero without thrusters. |
 | **`max_\|\|L\|\|`** | **`8.12e-10 N·m·s`** | `1.35e+00 N·m·s` | Peak total angular momentum about the system COM; conserved at numerical zero in free-floating, injected by RCS in free-flying. |
 | **`com_drift`** | **`0.0000 mm`** | `32.1620 mm` | Maximum excursion of the combined spacecraft COM; invariant under purely internal joint torques. |
@@ -126,16 +149,16 @@ Physics collision primitives in `models/space_manipulator.xml` are cleanly separ
 
 | Component | STL Mesh (`models/meshes/`) | Triangles | Material | Description |
 | :--- | :--- | :---: | :--- | :--- |
-| **Servicing Bus** | `sat_bus_frame.stl` | 2,132 | `bus_alloy` | Octagonal chassis ($600\times600\times600\text{ mm}$), top HGA parabolic dish, dual star trackers, S-band mast, `+X` arm adapter |
+| **Servicing Bus** | `sat_bus_frame.stl` | 2,132 | `bus_alloy` | Octagonal chassis (`600 × 600 × 600 mm`), top HGA parabolic dish, dual star trackers, S-band mast, `+X` arm adapter |
 | **Thermal Blankets** | `sat_mli_foil.stl` | 1,312 | `gold_mli` | Multi-Layer Insulation (MLI) crinkle-relief gold foil panels across bus faces |
 | **RCS Propulsion** | `sat_rcs_thrusters.stl` | 7,232 | `rcs_dark` | 8 corner thruster pods with 3 conical de Laval nozzles each (**24 nozzles total**) |
-| **Solar Wing Structure** | `solar_array_frame.stl` | 736 | `carbon_fiber` | Dual SADA rotary drums, Y-yoke deployment trusses, and ribbed perimeter frames along $\pm Y$ |
-| **Solar Photovoltaics** | `solar_array_cells.stl` | 576 | `solar_cell` | Raised stepped photovoltaic cell bays on $+Z$ and $-Z$ wing faces |
-| **Arm Link 1 (Shoulder Yaw)** | `arm_link1_housing.stl` | 720 | `aero_white` | Joint 1 vertical actuator drum ($Z$-axis) and dual-cheek clevis yoke |
+| **Solar Wing Structure** | `solar_array_frame.stl` | 736 | `carbon_fiber` | Dual SADA rotary drums, Y-yoke deployment trusses, and ribbed perimeter frames along `±Y` |
+| **Solar Photovoltaics** | `solar_array_cells.stl` | 576 | `solar_cell` | Raised stepped photovoltaic cell bays on `+Z` and `-Z` wing faces |
+| **Arm Link 1 (Shoulder Yaw)** | `arm_link1_housing.stl` | 720 | `aero_white` | Joint 1 vertical actuator drum (`Z`-axis) and dual-cheek clevis yoke |
 | **Arm Link 1 Accents** | `arm_link1_accents.stl` | 848 | `anodized_accent` | Thermal rings, Joint 2 encoder caps, and external umbilical conduit |
-| **Arm Link 2 (Upper Boom)** | `arm_link2_housing.stl` | 592 | `aero_white` | Canadarm2/SSRMS-style tapered octagonal boom ($550\text{ mm}$) and Joint 3 clevis |
+| **Arm Link 2 (Upper Boom)** | `arm_link2_housing.stl` | 592 | `aero_white` | Canadarm2/SSRMS-style tapered octagonal boom (`550 mm`) and Joint 3 clevis |
 | **Arm Link 2 Accents** | `arm_link2_accents.stl` | 1,328 | `anodized_accent` | Joint encoder caps and dual shoulder cable harnesses |
-| **Arm Link 3 (Forearm/Wrist)** | `arm_link3_wrist.stl` | 876 | `aero_white` | Tapered forearm boom ($510\text{ mm}$), reinforcing wrist rings, and optical inspection camera pod |
+| **Arm Link 3 (Forearm/Wrist)** | `arm_link3_wrist.stl` | 876 | `aero_white` | Tapered forearm boom (`510 mm`), reinforcing wrist rings, and optical inspection camera pod |
 | **End-Effector Gripper** | `arm_gripper.stl` | 980 | `rcs_dark` | Wrist collar, capture alignment ring, and **3-finger** chamfered orbital gripper spanning `ee_site` |
 | **Target Spacecraft** | `target_sat_body.stl` | 432 | `target_hull` | Hexagonal target bus with deployable solar fins and telemetry antenna (`mocap="true"`) |
 | **Target Grapple Fixture** | `target_grapple_fixture.stl` | 556 | `gold_mli` | Conical capture alignment plate, grapple shaft, and 3 radial target tabs centered at `target_site` |
