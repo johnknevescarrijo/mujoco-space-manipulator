@@ -32,10 +32,14 @@ $$
 ```text
 mujoco-space-manipulator/
 ├── models/
+│   ├── meshes/
+│   │   ├── freecad_space_manipulator.FCMacro  # Macro paramétrica (Part) para editar/exportar no FreeCAD
+│   │   └── *.stl                              # 13 malhas CAD binárias em mm (escala 0.001 no MJCF)
 │   └── space_manipulator.xml      # Modelo MJCF (0g, RK4, satélite 6-DoF + braço 3-DoF + alvo mocap)
 ├── src/space_manipulator/
 │   ├── __init__.py
 │   ├── model_loader.py            # Carregamento do MJCF, reset de estado e leitura de sensores/sites
+│   ├── mesh_generator.py          # Gerador paramétrico das malhas CAD 3D binárias (.stl em mm)
 │   ├── kinematics.py              # Quaternions, J_b/J_m, H particionada, GJM (J*) e momento total
 │   ├── controller.py              # Controladores free-floating (GJM) e free-flying (RCS 6-DoF + braço)
 │   └── sim.py                     # Loop de simulação, telemetria, gráficos Matplotlib e CLI
@@ -90,6 +94,36 @@ Para salvar telemetria de um único modo:
 
 ```bash
 space-manipulator --headless --mode free-floating --duration 6.0 --plot outputs/free_floating.png
+```
+
+---
+
+## Fluxo CAD com FreeCAD (`models/meshes/`)
+
+As malhas 3D do satélite (`base_sat`), do braço robótico (`link1..3` + garra) e do satélite-alvo (`target_satellite`) são armazenadas em `models/meshes/*.stl` em **milímetros (`mm`)** e carregadas em `models/space_manipulator.xml` com `scale="0.001 0.001 0.001"` (conversão direta `mm -> m`), mantendo intactas a física, os eixos de junta e as inércias originais.
+
+### Editando e exportando pelo FreeCAD
+
+1. Abra o **FreeCAD**, acesse **Macro → Macros...** e execute `models/meshes/freecad_space_manipulator.FCMacro` (usa a bancada **Part**).
+2. A macro cria o documento `SpaceManipulatorCAD` com todos os 13 sólidos paramétricos organizados na montagem completa:
+   - `sat_bus_frame`, `sat_mli_foil`, `sat_rcs_thrusters`, `solar_array_frame`, `solar_array_cells`
+   - `arm_link1_housing`, `arm_link1_accents`, `arm_link2_housing`, `arm_link2_accents`, `arm_link3_wrist`, `arm_gripper`
+   - `target_sat_body`, `target_grapple_fixture`
+3. Ajuste qualquer parâmetro em `PARAMS` ou edite os sólidos diretamente no FreeCAD.
+4. Para re-exportar todos os `.stl` (já no frame local de cada corpo em `mm`) para `models/meshes/`, execute no console Python do FreeCAD:
+
+```python
+export_all_stl()
+```
+
+*(Ou defina `AUTO_EXPORT_STL = True` no topo da macro. Se exportar manualmente via **File → Export**, certifique-se de exportar a peça no seu frame local com unidades em **mm**.)*
+
+### Regenerando as malhas padrão via Python
+
+Para regenerar os 13 arquivos `.stl` binários diretamente sem abrir o FreeCAD:
+
+```bash
+python -m space_manipulator.mesh_generator
 ```
 
 ---
