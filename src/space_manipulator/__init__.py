@@ -44,6 +44,20 @@ from space_manipulator.sim import (
     run_simulation,
 )
 
+try:
+    from space_manipulator.envs import (
+        ENV_IDS,
+        ActionMode,
+        EnvConfig,
+        MissionMode,
+        RewardWeights,
+        SpaceManipulatorEnv,
+        register_envs,
+    )
+    _HAS_GYMNASIUM = True
+except ImportError:
+    _HAS_GYMNASIUM = False
+
 __all__ = [
     "ARM_ACTUATOR_NAMES",
     "ARM_JOINT_NAMES",
@@ -81,3 +95,14 @@ __all__ = [
     "run_simulation",
     "set_target_pose",
 ]
+
+if _HAS_GYMNASIUM:
+    __all__ += [
+        "ENV_IDS",
+        "ActionMode",
+        "EnvConfig",
+        "MissionMode",
+        "RewardWeights",
+        "SpaceManipulatorEnv",
+        "register_envs",
+    ]
