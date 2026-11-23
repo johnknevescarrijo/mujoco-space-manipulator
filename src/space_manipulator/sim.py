@@ -74,10 +74,15 @@ def run_simulation(
         base_quat=base_ref_quat,
         arm_qpos=arm_qpos,
         target_pos=target_arr,
+        indices=indices,
     )
 
     controller = SpaceManipulatorController(model, mode=mode)
-    base_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_sat")
+    base_body_id = (
+        indices.base_body_id
+        if indices.base_body_id is not None
+        else mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "base_sat")
+    )
     dt = float(model.opt.timestep)
     n_steps = max(1, int(round(duration / dt)))
 
@@ -97,19 +102,23 @@ def run_simulation(
     arm_qpos_idx = list(indices.arm_qpos_adrs)
 
     def _step_and_record(step_idx: int) -> None:
+        # reset_state and the trailing mj_forward keep kinematics current for the next step
         out = controller.step(
             data,
             target_pos=target_arr,
             base_ref_pos=base_ref_pos,
             base_ref_quat=base_ref_quat,
+            forward=False,
         )
         mujoco.mj_forward(model, data)
 
-        ee_pos, _ = get_site_pose(model, data, "ee_site")
-        base_pos, _ = get_site_pose(model, data, "base_imu_site")
-        base_quat = read_sensor(model, data, "base_quat")
+        ee_pos, _ = get_site_pose(model, data, "ee_site", indices=indices)
+        base_pos, _ = get_site_pose(model, data, "base_imu_site", indices=indices)
+        base_quat = read_sensor(model, data, "base_quat", indices=indices)
         att_err = orientation_error(base_quat, base_ref_quat, frame="body")
-        lin_mom, ang_mom = compute_system_momentum(model, data)
+        lin_mom, ang_mom = compute_system_momentum(
+            model, data, root_body_id=base_body_id, indices=indices
+        )
 
         t_log[step_idx] = float(data.time)
         ee_pos_log[step_idx] = ee_pos
@@ -143,7 +152,7 @@ def run_simulation(
                 step_start = time_mod.perf_counter()
                 _step_and_record(i)
                 viewer.sync()
-                if realtime or True:
+                if realtime:
                     remaining = dt - (time_mod.perf_counter() - step_start)
                     if remaining > 0.0:
                         time_mod.sleep(remaining)
