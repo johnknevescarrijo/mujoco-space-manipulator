@@ -15,6 +15,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+rl = [
+    "gymnasium>=1.0.0",
+]
 dev = [
     "pytest>=7.0.0",
 ]
