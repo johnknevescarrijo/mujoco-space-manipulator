@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import mujoco
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-from space_manipulator.model_loader import ModelIndices, get_model_indices
+from space_manipulator.model_loader import BASE_BODY_NAME, ModelIndices, get_model_indices
 
 
 @dataclass(frozen=True)
@@ -86,23 +87,32 @@ def orientation_error(
     q_des = normalize_quaternion(desired_quat)
 
     if frame == "body":
-        q_err = quaternion_multiply(quaternion_conjugate(q_cur), q_des)
+        # q_cur^{-1} * q_des
+        w1, x1, y1, z1 = float(q_cur[0]), -float(q_cur[1]), -float(q_cur[2]), -float(q_cur[3])
+        w2, x2, y2, z2 = float(q_des[0]), float(q_des[1]), float(q_des[2]), float(q_des[3])
     elif frame == "world":
-        q_err = quaternion_multiply(q_des, quaternion_conjugate(q_cur))
+        # q_des * q_cur^{-1}
+        w1, x1, y1, z1 = float(q_des[0]), float(q_des[1]), float(q_des[2]), float(q_des[3])
+        w2, x2, y2, z2 = float(q_cur[0]), -float(q_cur[1]), -float(q_cur[2]), -float(q_cur[3])
     else:
         raise ValueError(f"Unsupported frame '{frame}'; expected 'body' or 'world'.")
 
+    qw = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    qx = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    qy = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    qz = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+
     # Shortest-path rotation: keep scalar component non-negative
-    if q_err[0] < 0.0:
-        q_err = -q_err
+    if qw < 0.0:
+        qw, qx, qy, qz = -qw, -qx, -qy, -qz
 
-    vec = q_err[1:4]
-    vec_norm = float(np.linalg.norm(vec))
+    vec_norm = math.sqrt(qx * qx + qy * qy + qz * qz)
     if vec_norm < 1e-12:
-        return 2.0 * vec
+        return np.array([2.0 * qx, 2.0 * qy, 2.0 * qz], dtype=float)
 
-    angle = 2.0 * float(np.arctan2(vec_norm, np.clip(q_err[0], -1.0, 1.0)))
-    return (angle / vec_norm) * vec
+    qw_clamped = min(max(qw, -1.0), 1.0)
+    scale = (2.0 * math.atan2(vec_norm, qw_clamped)) / vec_norm
+    return np.array([scale * qx, scale * qy, scale * qz], dtype=float)
 
 
 def compute_site_jacobian(
@@ -134,14 +144,22 @@ def compute_site_jacobian(
         if site_id < 0:
             raise ValueError(f"Site '{site_name}' not found in MJCF model.")
 
-    jacp = np.zeros((3, model.nv), dtype=float)
-    jacr = np.zeros((3, model.nv), dtype=float)
+    jacp = np.empty((3, model.nv), dtype=float)
+    jacr = np.empty((3, model.nv), dtype=float) if include_rotation else None
     mujoco.mj_jacSite(model, data, jacp, jacr, site_id)
 
     base_cols = slice(idx.base_qvel_adr, idx.base_qvel_adr + 6)
-    arm_cols = list(idx.arm_qvel_adrs)
+    arm_adrs = idx.arm_qvel_adrs
+    if (
+        len(arm_adrs) > 0
+        and arm_adrs[-1] - arm_adrs[0] == len(arm_adrs) - 1
+        and arm_adrs == tuple(range(arm_adrs[0], arm_adrs[-1] + 1))
+    ):
+        arm_cols: slice | list[int] = slice(arm_adrs[0], arm_adrs[-1] + 1)
+    else:
+        arm_cols = list(arm_adrs)
 
-    if include_rotation:
+    if include_rotation and jacr is not None:
         j_full = np.vstack([jacp, jacr])
         return j_full[:, base_cols].copy(), j_full[:, arm_cols].copy()
 
@@ -161,15 +179,24 @@ def compute_mass_matrix(
         ``h_bm`` ``(6, 3)``, and ``h_m`` ``(3, 3)``.
     """
     idx = indices if indices is not None else get_model_indices(model)
-    full = np.zeros((model.nv, model.nv), dtype=float)
+    full = np.empty((model.nv, model.nv), dtype=float)
     mujoco.mj_fullM(model, data, full)
 
     b_slice = slice(idx.base_qvel_adr, idx.base_qvel_adr + 6)
-    m_idx = list(idx.arm_qvel_adrs)
-
-    h_b = full[b_slice, b_slice].copy()
-    h_bm = full[b_slice, m_idx].copy()
-    h_m = full[np.ix_(m_idx, m_idx)].copy()
+    arm_adrs = idx.arm_qvel_adrs
+    if (
+        len(arm_adrs) > 0
+        and arm_adrs == tuple(range(arm_adrs[0], arm_adrs[0] + len(arm_adrs)))
+    ):
+        m_slice = slice(arm_adrs[0], arm_adrs[0] + len(arm_adrs))
+        h_b = full[b_slice, b_slice].copy()
+        h_bm = full[b_slice, m_slice].copy()
+        h_m = full[m_slice, m_slice].copy()
+    else:
+        m_idx = list(arm_adrs)
+        h_b = full[b_slice, b_slice].copy()
+        h_bm = full[b_slice, m_idx].copy()
+        h_m = full[np.ix_(m_idx, m_idx)].copy()
     return PartitionedMassMatrix(full=full, h_b=h_b, h_bm=h_bm, h_m=h_m)
 
 
@@ -216,15 +243,20 @@ def damped_pseudoinverse(
         raise ValueError("Damping factor must be non-negative.")
     j = np.asarray(jacobian, dtype=float)
     rows = j.shape[0]
-    gram = j @ j.T + (damping**2) * np.eye(rows, dtype=float)
-    return j.T @ np.linalg.inv(gram)
+    gram = j @ j.T
+    if damping > 0.0:
+        gram.flat[:: rows + 1] += damping * damping
+    return np.linalg.solve(gram, j).T
 
 
 def compute_system_momentum(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     *,
-    root_body_name: str = "base_sat",
+    root_body_name: str = BASE_BODY_NAME,
+    root_body_id: int | None = None,
+    indices: ModelIndices | None = None,
+    update_subtree_vel: bool = True,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Compute total linear momentum and COM angular momentum of the spacecraft.
 
@@ -234,11 +266,21 @@ def compute_system_momentum(
     Returns:
         Tuple ``(linear_momentum, angular_momentum)`` in world frame.
     """
-    root_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, root_body_name)
-    if root_id < 0:
-        raise ValueError(f"Body '{root_body_name}' not found in MJCF model.")
+    if root_body_id is not None:
+        root_id = root_body_id
+    elif (
+        indices is not None
+        and indices.base_body_id is not None
+        and root_body_name == BASE_BODY_NAME
+    ):
+        root_id = indices.base_body_id
+    else:
+        root_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, root_body_name)
+        if root_id < 0:
+            raise ValueError(f"Body '{root_body_name}' not found in MJCF model.")
 
-    mujoco.mj_subtreeVel(model, data)
+    if update_subtree_vel:
+        mujoco.mj_subtreeVel(model, data)
     subtree_mass = float(model.body_subtreemass[root_id])
     linear_momentum = subtree_mass * data.subtree_linvel[root_id].copy()
     angular_momentum = data.subtree_angmom[root_id].copy()

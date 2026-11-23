@@ -14,6 +14,7 @@ from space_manipulator import (
     BASE_ACTUATOR_NAMES,
     SENSOR_NAMES,
     SITE_NAMES,
+    compute_system_momentum,
     get_model_indices,
     get_site_pose,
     get_state_summary,
@@ -170,4 +171,103 @@ def test_cad_stl_meshes_loaded_in_mjmodel(tmp_path: Path) -> None:
     for stats in generated.values():
         assert stats.path.is_file()
         assert stats.triangle_count > 0
+
+
+def test_arm_joint_limits_are_self_collision_free() -> None:
+    model, data = load_model()
+    indices = get_model_indices(model)
+
+    ranges = [model.jnt_range[jid] for jid in indices.arm_joint_ids]
+    grids = [np.linspace(low, high, 13) for low, high in ranges]
+
+    for j1 in grids[0]:
+        for j2 in grids[1]:
+            for j3 in grids[2]:
+                for adr, val in zip(indices.arm_qpos_adrs, (j1, j2, j3)):
+                    data.qpos[adr] = val
+                mujoco.mj_kinematics(model, data)
+                mujoco.mj_collision(model, data)
+                assert data.ncon == 0, (
+                    f"Unexpected self-collision at q=({j1:.3f}, {j2:.3f}, {j3:.3f})"
+                )
+
+
+def test_reset_state_with_initial_velocities_and_momentum() -> None:
+    import pytest
+
+    model, data = load_model()
+    indices = get_model_indices(model)
+
+    base_linvel = np.array([0.12, -0.05, 0.08])
+    base_angvel = np.array([0.04, -0.09, 0.15])
+    arm_qvel = np.array([0.2, -0.3, 0.25])
+
+    reset_state(
+        model,
+        data,
+        arm_qpos=[0.1, 0.2, -0.3],
+        base_linvel=base_linvel,
+        base_angvel=base_angvel,
+        arm_qvel=arm_qvel,
+        indices=indices,
+    )
+
+    assert np.allclose(
+        data.qvel[indices.base_qvel_adr : indices.base_qvel_adr + 3], base_linvel
+    )
+    assert np.allclose(
+        data.qvel[indices.base_qvel_adr + 3 : indices.base_qvel_adr + 6], base_angvel
+    )
+    assert np.allclose(data.qvel[list(indices.arm_qvel_adrs)], arm_qvel)
+
+    lin_mom, ang_mom = compute_system_momentum(model, data, indices=indices)
+    assert np.linalg.norm(lin_mom) > 1.0
+    assert np.linalg.norm(ang_mom) > 0.1
+
+    with pytest.raises(ValueError, match="base_linvel"):
+        reset_state(model, data, base_linvel=[1.0, 2.0])
+    with pytest.raises(ValueError, match="base_angvel"):
+        reset_state(model, data, base_angvel=[1.0, 2.0])
+    with pytest.raises(ValueError, match="arm_qvel"):
+        reset_state(model, data, arm_qvel=[1.0, 2.0])
+
+
+def test_cached_indices_equivalence() -> None:
+    model, data = load_model()
+    indices = get_model_indices(model)
+
+    reset_state(
+        model,
+        data,
+        base_pos=[0.1, -0.2, 0.05],
+        arm_qpos=[0.25, -0.3, 0.4],
+        target_pos=[1.2, 0.1, 0.2],
+        indices=indices,
+    )
+
+    set_target_pose(model, data, [1.25, -0.15, 0.3], indices=indices)
+    pos_cached, rot_cached = get_site_pose(model, data, "ee_site", indices=indices)
+    pos_uncached, rot_uncached = get_site_pose(model, data, "ee_site")
+    assert np.allclose(pos_cached, pos_uncached)
+    assert np.allclose(rot_cached, rot_uncached)
+
+    assert np.allclose(
+        read_sensor(model, data, "ee_pos", indices=indices),
+        read_sensor(model, data, "ee_pos"),
+    )
+    s_cached = read_all_sensors(model, data, indices=indices)
+    s_uncached = read_all_sensors(model, data)
+    assert s_cached.keys() == s_uncached.keys()
+    for name in s_cached:
+        assert np.allclose(s_cached[name], s_uncached[name])
+
+    sum_cached = get_state_summary(model, data, indices=indices)
+    sum_uncached = get_state_summary(model, data)
+    assert np.allclose(sum_cached["ee_pos"], sum_uncached["ee_pos"])
+    assert np.allclose(sum_cached["target_pos"], sum_uncached["target_pos"])
+
+    p_c, l_c = compute_system_momentum(model, data, indices=indices)
+    p_u, l_u = compute_system_momentum(model, data)
+    assert np.allclose(p_c, p_u)
+    assert np.allclose(l_c, l_u)
 

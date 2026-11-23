@@ -92,9 +92,10 @@
       <site name="base_imu_site" pos="0 0 0" size="0.03" rgba="1.0 0.55 0.0 0.9"/>
 
       <!-- 3-DoF Serial Robotic Arm mounted on +X face -->
+      <!-- Joint ranges bound the arm outside the bus/solar-wing self-collision envelope -->
       <body name="link1" pos="0.33 0 0">
         <inertial pos="0.04 0 0" mass="2.0" diaginertia="0.01 0.01 0.01"/>
-        <joint name="joint1" type="hinge" axis="0 0 1" range="-2.0944 2.0944" damping="0.1" armature="0.02"/>
+        <joint name="joint1" type="hinge" axis="0 0 1" range="-1.0 1.0" damping="0.1" armature="0.02"/>
 
         <geom name="link1_hub" type="cylinder" pos="0 0 0" size="0.055 0.05" group="3" rgba="0 0 0 0"/>
         <geom name="link1_bracket" type="box" pos="0.045 0 0" size="0.045 0.04 0.04" group="3" rgba="0 0 0 0"/>
@@ -106,7 +107,7 @@
 
         <body name="link2" pos="0.09 0 0">
           <inertial pos="0.275 0 0" mass="3.5" diaginertia="0.02 0.10 0.10"/>
-          <joint name="joint2" type="hinge" axis="0 1 0" range="-2.0944 2.0944" damping="0.1" armature="0.02"/>
+          <joint name="joint2" type="hinge" axis="0 1 0" range="-1.52 1.52" damping="0.1" armature="0.02"/>
 
           <geom name="joint2_housing" type="cylinder" pos="0 0 0" quat="0.707107 0.707107 0 0"
                 size="0.05 0.055" group="3" rgba="0 0 0 0"/>
@@ -119,7 +120,7 @@
 
           <body name="link3" pos="0.55 0 0">
             <inertial pos="0.27 0 0" mass="2.5" diaginertia="0.015 0.07 0.07"/>
-            <joint name="joint3" type="hinge" axis="0 1 0" range="-2.3562 2.3562" damping="0.1" armature="0.02"/>
+            <joint name="joint3" type="hinge" axis="0 1 0" range="-1.95 1.95" damping="0.1" armature="0.02"/>
 
             <geom name="joint3_housing" type="cylinder" pos="0 0 0" quat="0.707107 0.707107 0 0"
                   size="0.044 0.048" group="3" rgba="0 0 0 0"/>

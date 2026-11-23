@@ -12,6 +12,7 @@ from space_manipulator import (
     compute_mass_matrix,
     compute_site_jacobian,
     compute_system_momentum,
+    damped_pseudoinverse,
     get_model_indices,
     get_site_pose,
     load_model,
@@ -172,3 +173,30 @@ def test_controller_rejects_invalid_mode() -> None:
     model, _ = load_model()
     with pytest.raises(ValueError, match="Invalid control mode"):
         SpaceManipulatorController(model, mode="invalid-mode")  # type: ignore[arg-type]
+
+
+def test_damped_pseudoinverse_accuracy_and_validation() -> None:
+    j = np.array([[1.2, -0.4, 0.3], [0.1, 0.9, -0.5], [-0.2, 0.4, 1.1]])
+    j_pinv_exact = damped_pseudoinverse(j, damping=0.0)
+    assert np.allclose(j @ j_pinv_exact, np.eye(3), atol=1e-12)
+
+    damping = 0.04
+    j_pinv_dls = damped_pseudoinverse(j, damping=damping)
+    expected = j.T @ np.linalg.inv(j @ j.T + (damping**2) * np.eye(3))
+    assert np.allclose(j_pinv_dls, expected, atol=1e-12)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        damped_pseudoinverse(j, damping=-0.01)
+
+
+def test_compute_control_forward_flag_equivalence() -> None:
+    model, data = load_model()
+    reset_state(model, data, arm_qpos=[0.1, 0.3, -0.4], target_pos=[1.15, 0.35, 0.25])
+
+    ctrl = SpaceManipulatorController(model, mode="free-floating")
+    out_with_fwd = ctrl.compute_control(data, forward=True)
+    out_no_fwd = ctrl.compute_control(data, forward=False)
+
+    assert np.allclose(out_with_fwd.u_arm, out_no_fwd.u_arm)
+    assert np.allclose(out_with_fwd.u_base, out_no_fwd.u_base)
+    assert np.allclose(out_with_fwd.jacobian_used, out_no_fwd.jacobian_used)
