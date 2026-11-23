@@ -25,6 +25,7 @@ htmlcov/
 outputs/
 results/
 logs/
+runs/
 *.mp4
 *.gif
 

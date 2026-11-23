@@ -17,6 +17,8 @@ dependencies = [
 [project.optional-dependencies]
 rl = [
     "gymnasium>=1.0.0",
+    "stable-baselines3>=2.3.0",
+    "torch>=2.0.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -24,6 +26,8 @@ dev = [
 
 [project.scripts]
 space-manipulator = "space_manipulator.sim:main"
+space-manipulator-train = "space_manipulator.rl.train:main"
+space-manipulator-benchmark = "space_manipulator.rl.benchmark:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
