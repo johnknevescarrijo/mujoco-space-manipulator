@@ -14,6 +14,7 @@ DEFAULT_MODEL_PATH: Path = (
     Path(__file__).resolve().parents[2] / "models" / "space_manipulator.xml"
 )
 
+BASE_BODY_NAME: str = "base_sat"
 BASE_FREEJOINT_NAME: str = "base_freejoint"
 TARGET_BODY_NAME: str = "target_satellite"
 
@@ -65,6 +66,7 @@ class ModelIndices:
     site_ids: dict[str, int]
     sensor_slices: dict[str, tuple[int, int]]
     target_mocap_id: int
+    base_body_id: int | None = None
 
 
 def _require_id(model: mujoco.MjModel, obj_type: mujoco.mjtObj, name: str) -> int:
@@ -130,6 +132,7 @@ def get_model_indices(model: mujoco.MjModel) -> ModelIndices:
         dim = int(model.sensor_dim[sid])
         sensor_slices[name] = (adr, dim)
 
+    base_body_id = _require_id(model, mujoco.mjtObj.mjOBJ_BODY, BASE_BODY_NAME)
     target_body_id = _require_id(model, mujoco.mjtObj.mjOBJ_BODY, TARGET_BODY_NAME)
     target_mocap_id = int(model.body_mocapid[target_body_id])
     if target_mocap_id < 0:
@@ -149,6 +152,7 @@ def get_model_indices(model: mujoco.MjModel) -> ModelIndices:
         site_ids=site_ids,
         sensor_slices=sensor_slices,
         target_mocap_id=target_mocap_id,
+        base_body_id=base_body_id,
     )
 
 
@@ -159,13 +163,14 @@ def set_target_pose(
     quat: ArrayLike | None = None,
     *,
     forward: bool = True,
+    indices: ModelIndices | None = None,
 ) -> None:
     """Update the 3D pose of the mocap target satellite."""
-    indices = get_model_indices(model)
+    idx = indices if indices is not None else get_model_indices(model)
     pos_arr = np.asarray(pos, dtype=float)
     if pos_arr.shape != (3,):
         raise ValueError(f"Expected target pos shape (3,), got {pos_arr.shape}.")
-    data.mocap_pos[indices.target_mocap_id] = pos_arr
+    data.mocap_pos[idx.target_mocap_id] = pos_arr
 
     if quat is not None:
         quat_arr = np.asarray(quat, dtype=float)
@@ -176,7 +181,7 @@ def set_target_pose(
         norm = float(np.linalg.norm(quat_arr))
         if norm == 0.0:
             raise ValueError("Target quaternion cannot have zero norm.")
-        data.mocap_quat[indices.target_mocap_id] = quat_arr / norm
+        data.mocap_quat[idx.target_mocap_id] = quat_arr / norm
 
     if forward:
         mujoco.mj_forward(model, data)
@@ -191,16 +196,26 @@ def reset_state(
     arm_qpos: ArrayLike | None = None,
     target_pos: ArrayLike | None = None,
     target_quat: ArrayLike | None = None,
+    base_linvel: ArrayLike | None = None,
+    base_angvel: ArrayLike | None = None,
+    arm_qvel: ArrayLike | None = None,
+    indices: ModelIndices | None = None,
 ) -> None:
-    """Reset simulation state, optionally setting base, arm, and target poses."""
+    """Reset simulation state, optionally setting base, arm, velocity, and target states.
+
+    Velocity frames follow MuJoCo's ``<freejoint>`` convention:
+        - ``base_linvel``: 3D linear velocity ``qvel[0:3]`` in the **world** frame (m/s).
+        - ``base_angvel``: 3D angular velocity ``qvel[3:6]`` in the **body** frame (rad/s).
+        - ``arm_qvel``: 3D arm joint velocities (rad/s).
+    """
     mujoco.mj_resetData(model, data)
-    indices = get_model_indices(model)
+    idx = indices if indices is not None else get_model_indices(model)
 
     if base_pos is not None:
         pos_arr = np.asarray(base_pos, dtype=float)
         if pos_arr.shape != (3,):
             raise ValueError(f"Expected base_pos shape (3,), got {pos_arr.shape}.")
-        data.qpos[indices.base_qpos_adr : indices.base_qpos_adr + 3] = pos_arr
+        data.qpos[idx.base_qpos_adr : idx.base_qpos_adr + 3] = pos_arr
 
     if base_quat is not None:
         quat_arr = np.asarray(base_quat, dtype=float)
@@ -211,7 +226,7 @@ def reset_state(
         norm = float(np.linalg.norm(quat_arr))
         if norm == 0.0:
             raise ValueError("Base quaternion cannot have zero norm.")
-        data.qpos[indices.base_qpos_adr + 3 : indices.base_qpos_adr + 7] = (
+        data.qpos[idx.base_qpos_adr + 3 : idx.base_qpos_adr + 7] = (
             quat_arr / norm
         )
 
@@ -221,16 +236,43 @@ def reset_state(
             raise ValueError(
                 f"Expected arm_qpos shape ({len(ARM_JOINT_NAMES)},), got {arm_arr.shape}."
             )
-        for adr, val in zip(indices.arm_qpos_adrs, arm_arr):
+        for adr, val in zip(idx.arm_qpos_adrs, arm_arr):
             data.qpos[adr] = val
+
+    if base_linvel is not None:
+        linvel_arr = np.asarray(base_linvel, dtype=float)
+        if linvel_arr.shape != (3,):
+            raise ValueError(
+                f"Expected base_linvel shape (3,), got {linvel_arr.shape}."
+            )
+        data.qvel[idx.base_qvel_adr : idx.base_qvel_adr + 3] = linvel_arr
+
+    if base_angvel is not None:
+        angvel_arr = np.asarray(base_angvel, dtype=float)
+        if angvel_arr.shape != (3,):
+            raise ValueError(
+                f"Expected base_angvel shape (3,), got {angvel_arr.shape}."
+            )
+        data.qvel[idx.base_qvel_adr + 3 : idx.base_qvel_adr + 6] = angvel_arr
+
+    if arm_qvel is not None:
+        arm_qvel_arr = np.asarray(arm_qvel, dtype=float)
+        if arm_qvel_arr.shape != (len(ARM_JOINT_NAMES),):
+            raise ValueError(
+                f"Expected arm_qvel shape ({len(ARM_JOINT_NAMES)},), got {arm_qvel_arr.shape}."
+            )
+        for adr, val in zip(idx.arm_qvel_adrs, arm_qvel_arr):
+            data.qvel[adr] = val
 
     if target_pos is not None or target_quat is not None:
         current_pos = (
             target_pos
             if target_pos is not None
-            else data.mocap_pos[indices.target_mocap_id].copy()
+            else data.mocap_pos[idx.target_mocap_id].copy()
         )
-        set_target_pose(model, data, current_pos, target_quat, forward=False)
+        set_target_pose(
+            model, data, current_pos, target_quat, forward=False, indices=idx
+        )
 
     mujoco.mj_forward(model, data)
 
@@ -239,8 +281,16 @@ def read_sensor(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     sensor_name: str,
+    *,
+    indices: ModelIndices | None = None,
 ) -> NDArray[np.float64]:
     """Read a single named sensor from ``data.sensordata``."""
+    if indices is not None:
+        slice_info = indices.sensor_slices.get(sensor_name)
+        if slice_info is not None:
+            adr, dim = slice_info
+            return data.sensordata[adr : adr + dim].copy()
+
     sid = _require_id(model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_name)
     adr = int(model.sensor_adr[sid])
     dim = int(model.sensor_dim[sid])
@@ -250,12 +300,14 @@ def read_sensor(
 def read_all_sensors(
     model: mujoco.MjModel,
     data: mujoco.MjData,
+    *,
+    indices: ModelIndices | None = None,
 ) -> dict[str, NDArray[np.float64]]:
     """Read all standard space manipulator sensors as a dictionary."""
-    indices = get_model_indices(model)
+    idx = indices if indices is not None else get_model_indices(model)
     return {
         name: data.sensordata[adr : adr + dim].copy()
-        for name, (adr, dim) in indices.sensor_slices.items()
+        for name, (adr, dim) in idx.sensor_slices.items()
     }
 
 
@@ -263,9 +315,13 @@ def get_site_pose(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     site_name: str,
+    *,
+    indices: ModelIndices | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Return world position ``(3,)`` and rotation matrix ``(3, 3)`` for a site."""
-    sid = _require_id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+    sid = indices.site_ids.get(site_name) if indices is not None else None
+    if sid is None:
+        sid = _require_id(model, mujoco.mjtObj.mjOBJ_SITE, site_name)
     pos = data.site_xpos[sid].copy()
     rotmat = data.site_xmat[sid].reshape(3, 3).copy()
     return pos, rotmat
@@ -274,11 +330,13 @@ def get_site_pose(
 def get_state_summary(
     model: mujoco.MjModel,
     data: mujoco.MjData,
+    *,
+    indices: ModelIndices | None = None,
 ) -> dict[str, Any]:
     """Return a structured summary of the current base, arm, and target state."""
-    indices = get_model_indices(model)
-    sensors = read_all_sensors(model, data)
-    target_pos, _ = get_site_pose(model, data, "target_site")
+    idx = indices if indices is not None else get_model_indices(model)
+    sensors = read_all_sensors(model, data, indices=idx)
+    target_pos, _ = get_site_pose(model, data, "target_site", indices=idx)
 
     return {
         "time": float(data.time),
@@ -287,10 +345,10 @@ def get_state_summary(
         "base_linvel": sensors["base_linvel"],
         "base_angvel": sensors["base_angvel"],
         "arm_qpos": np.array(
-            [data.qpos[adr] for adr in indices.arm_qpos_adrs], dtype=float
+            [data.qpos[adr] for adr in idx.arm_qpos_adrs], dtype=float
         ),
         "arm_qvel": np.array(
-            [data.qvel[adr] for adr in indices.arm_qvel_adrs], dtype=float
+            [data.qvel[adr] for adr in idx.arm_qvel_adrs], dtype=float
         ),
         "ee_pos": sensors["ee_pos"],
         "ee_linvel": sensors["ee_linvel"],
